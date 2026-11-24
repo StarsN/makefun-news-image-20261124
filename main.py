@@ -1,518 +1,558 @@
 #!/usr/bin/env python3
-"""Draw the front page of THE WORLD TODAY for Tuesday 24 November 2026.
+"""THE OTTER TIMES - Tuesday, 24 November 2026.
 
-Pure Python 3 standard library only. No network access, no files read at
-runtime. Renders a 1024x1024 newspaper front page using a hand-built 5x7
-bitmap font and a hand-rolled PNG encoder, so two runs produce exactly
-the same bytes.
+A one-page newspaper front page, drawn entirely at runtime with the
+Python 3 standard library.  No images, no network access, no files read
+at runtime.  The program builds a 1024x1024 RGB picture in memory --
+paper, rules, a hand-drawn masthead, headlines, small hand-drawn
+pictures for each story -- and writes it out as a PNG.
 
-Run:  MAKEFUN_OUTPUT_DIR=out python3 main.py   (writes out/entry.png)
+Everything here is written from scratch for this page: the bitmap font
+below is my own 5-wide, 8-tall design, and the PNG writer is my own
+minimal encoder (signature, IHDR, one IDAT, IEND).
+
+Output: $MAKEFUN_OUTPUT_DIR/entry.png (default: out/entry.png).
+The output is deterministic: the same input always produces the same
+bytes, so two runs give byte-identical files.
 """
 
+import hashlib
 import math
 import os
 import struct
+import sys
 import zlib
 
-WIDTH, HEIGHT = 1024, 1024
+WIDTH = 1024
+HEIGHT = 1024
 
-# ------------------------------------------------------------------ colours
-PAPER = (248, 244, 236)
-INK = (24, 24, 24)
-GREY = (80, 76, 68)
-RED = (178, 40, 44)
-NAVY = (22, 40, 70)
-TEAL = (14, 106, 90)
-SKYBLUE = (30, 80, 124)
-PURPLE = (94, 46, 140)
-BROWN = (140, 92, 44)
-ORANGE = (182, 88, 30)
-GREEN = (34, 120, 58)
+# Palette: (red, green, blue).
+PAPER = (248, 244, 233)       # warm newsprint
+INK = (22, 22, 22)            # near-black text and rules
+GREY = (112, 110, 102)        # captions and secondary text
+LIGHT = (232, 228, 218)       # light panel background
+SKY = (178, 208, 224)         # light blue sky in pictures
+RED = (168, 44, 36)           # accent red
+BLUE = (38, 84, 138)          # deep blue
+DARK_BLUE = (30, 60, 96)      # chip body
+GREEN = (34, 120, 62)         # rising market green
+ORANGE = (204, 110, 28)       # flame and sun
 WHITE = (255, 255, 255)
-GOLD = (200, 154, 54)
-LIGHT = (236, 232, 220)
-CHIPGREEN = (22, 140, 70)
-DARKGREEN = (16, 90, 48)
-SAND = (214, 190, 150)
+MID_GREY = (150, 148, 138)
 
-# -------------------------------------------------------------------- font
-# 5x7 pixel font. '#' is a set pixel. Anything lowercase prints as uppercase.
-GLYPHS = {
-    "A": (" ### ", "#   #", "#   #", "#####", "#   #", "#   #", "#   #"),
-    "B": ("#### ", "#   #", "#   #", "#### ", "#   #", "#   #", "#### "),
-    "C": (" ####", "#    ", "#    ", "#    ", "#    ", "#    ", " ####"),
-    "D": ("#### ", "#   #", "#   #", "#   #", "#   #", "#   #", "#### "),
-    "E": ("#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#####"),
-    "F": ("#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#    "),
-    "G": (" ####", "#    ", "#    ", "# ###", "#   #", "#   #", " ### "),
-    "H": ("#   #", "#   #", "#   #", "#####", "#   #", "#   #", "#   #"),
-    "I": ("#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "#####"),
-    "J": ("  ###", "   # ", "   # ", "   # ", "   # ", "#  # ", " ##  "),
-    "K": ("#   #", "#  # ", "# #  ", "##   ", "# #  ", "#  # ", "#   #"),
-    "L": ("#    ", "#    ", "#    ", "#    ", "#    ", "#    ", "#####"),
-    "M": ("#   #", "## ##", "# # #", "# # #", "#   #", "#   #", "#   #"),
-    "N": ("#   #", "##  #", "##  #", "# # #", "#  ##", "#  ##", "#   #"),
-    "O": (" ### ", "#   #", "#   #", "#   #", "#   #", "#   #", " ### "),
-    "P": ("#### ", "#   #", "#   #", "#### ", "#    ", "#    ", "#    "),
-    "Q": (" ### ", "#   #", "#   #", "#   #", "# # #", "#  # ", " ## #"),
-    "R": ("#### ", "#   #", "#   #", "#### ", "# #  ", "#  # ", "#   #"),
-    "S": (" ####", "#    ", "#    ", " ### ", "    #", "    #", "#### "),
-    "T": ("#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  "),
-    "U": ("#   #", "#   #", "#   #", "#   #", "#   #", "#   #", " ### "),
-    "V": ("#   #", "#   #", "#   #", "#   #", "#   #", " # # ", "  #  "),
-    "W": ("#   #", "#   #", "#   #", "# # #", "# # #", "## ##", "#   #"),
-    "X": ("#   #", "#   #", " # # ", "  #  ", " # # ", "#   #", "#   #"),
-    "Y": ("#   #", "#   #", " # # ", "  #  ", "  #  ", "  #  ", "  #  "),
-    "Z": ("#####", "    #", "   # ", "  #  ", " #   ", "#    ", "#####"),
-    "0": (" ### ", "#   #", "#  ##", "# # #", "##  #", "#   #", " ### "),
-    "1": ("  #  ", " ##  ", "  #  ", "  #  ", "  #  ", "  #  ", " ### "),
-    "2": (" ### ", "#   #", "    #", "   # ", "  #  ", " #   ", "#####"),
-    "3": ("#### ", "    #", "    #", " ### ", "    #", "    #", "#### "),
-    "4": ("   # ", "  ## ", " # # ", "#  # ", "#####", "   # ", "   # "),
-    "5": ("#####", "#    ", "#### ", "    #", "    #", "#   #", " ### "),
-    "6": (" ### ", "#    ", "#    ", "#### ", "#   #", "#   #", " ### "),
-    "7": ("#####", "    #", "   # ", "   # ", "  #  ", "  #  ", "  #  "),
-    "8": (" ### ", "#   #", "#   #", " ### ", "#   #", "#   #", " ### "),
-    "9": (" ### ", "#   #", "#   #", " ####", "    #", "    #", " ### "),
-    " ": ("     ", "     ", "     ", "     ", "     ", "     ", "     "),
-    ".": ("     ", "     ", "     ", "     ", " ##  ", " ##  ", "     "),
-    ",": ("     ", "     ", "     ", "     ", " ##  ", " ##  ", " #   "),
-    ":": ("     ", " ##  ", " ##  ", "     ", " ##  ", " ##  ", "     "),
-    ";": ("     ", " ##  ", " ##  ", "     ", " ##  ", " ##  ", " #   "),
-    "!": ("  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "     ", "  #  "),
-    "?": (" ### ", "#   #", "    #", "   # ", "  #  ", "     ", "  #  "),
-    "-": ("     ", "     ", "     ", " ### ", "     ", "     ", "     "),
-    "(": ("   # ", "  #  ", " #   ", " #   ", " #   ", "  #  ", "   # "),
-    ")": (" #   ", "  #  ", "   # ", "   # ", "   # ", "  #  ", " #   "),
-    "/": ("    #", "    #", "   # ", "   # ", "  #  ", " #   ", "#    "),
-    "%": ("#   #", "#  # ", "   # ", "  #  ", " #   ", "#  # ", "#   #"),
-    "+": ("     ", "  #  ", "  #  ", " ### ", "  #  ", "  #  ", "     "),
-    "=": ("     ", "     ", " ### ", "     ", " ### ", "     ", "     "),
-    "$": ("  #  ", " ####", "# #  ", " ### ", "  # #", "#### ", "  #  "),
-    "*": ("     ", "#   #", " # # ", " ### ", " # # ", "#   #", "     "),
-    '"': (" # # ", " # # ", " # # ", "     ", "     ", "     ", "     "),
-    "'": ("  #  ", "  #  ", " #   ", "     ", "     ", "     ", "     "),
-    "·": ("     ", "     ", "     ", " ##  ", " ##  ", "     ", "     "),
-    "•": ("     ", "     ", "     ", " ##  ", " ##  ", "     ", "     "),
-    "—": ("     ", "     ", "     ", "#####", "     ", "     ", "     "),
+# ---------------------------------------------------------------------------
+# Bitmap font.
+#
+# My own design: every glyph is 5 pixels wide and 8 rows tall, drawn on a
+# grid where "#" is ink and "." is empty.  Capitals and digits use rows
+# 0-6; lower-case letters sit on rows 2-6, with descenders (g, j, p, q,
+# y and the comma) dropping into row 7.  Characters advance 6 pixels
+# (5 for the glyph plus 1 of space) times the scale factor.
+# ---------------------------------------------------------------------------
+
+FONT = {
+    "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#", "....."),
+    "B": ("####.", "#...#", "#...#", "####.", "#...#", "#...#", "####.", "....."),
+    "C": (".####", "#....", "#....", "#....", "#....", "#....", ".####", "....."),
+    "D": ("####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####.", "....."),
+    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####", "....."),
+    "F": ("#####", "#....", "#....", "####.", "#....", "#....", "#....", "....."),
+    "G": (".####", "#....", "#....", "#.###", "#...#", "#...#", ".###.", "....."),
+    "H": ("#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#", "....."),
+    "I": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####", "....."),
+    "J": ("..###", "...#.", "...#.", "...#.", "...#.", "#..#.", ".##..", "....."),
+    "K": ("#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#", "....."),
+    "L": ("#....", "#....", "#....", "#....", "#....", "#....", "#####", "....."),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#", "....."),
+    "N": ("#...#", "##..#", "##..#", "#.#.#", "#..##", "#..##", "#...#", "....."),
+    "O": (".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###.", "....."),
+    "P": ("####.", "#...#", "#...#", "####.", "#....", "#....", "#....", "....."),
+    "Q": (".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#", "....."),
+    "R": ("####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#", "....."),
+    "S": (".####", "#....", "#....", ".###.", "....#", "....#", "####.", "....."),
+    "T": ("#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#..", "....."),
+    "U": ("#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###.", "....."),
+    "V": ("#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#..", "....."),
+    "W": ("#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#", "....."),
+    "X": ("#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#", "....."),
+    "Y": ("#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#..", "....."),
+    "Z": ("#####", "....#", "...#.", "..#..", ".#...", "#....", "#####", "....."),
+    "a": (".....", ".....", ".###.", "....#", ".####", "#...#", ".####", "....."),
+    "b": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "####.", "....."),
+    "c": (".....", ".....", ".####", "#....", "#....", "#....", ".####", "....."),
+    "d": ("....#", "....#", ".####", "#...#", "#...#", "#...#", ".####", "....."),
+    "e": (".....", ".....", ".###.", "#...#", "#####", "#....", ".###.", "....."),
+    "f": ("..##.", ".#...", ".#...", "####.", ".#...", ".#...", ".#...", "....."),
+    "g": (".....", ".....", ".####", "#...#", "#...#", ".####", "....#", ".###."),
+    "h": ("#....", "#....", "####.", "#...#", "#...#", "#...#", "#...#", "....."),
+    "i": ("..#..", ".....", ".##..", "..#..", "..#..", "..#..", ".###.", "....."),
+    "j": ("...#.", ".....", "..##.", "...#.", "...#.", "...#.", "...#.", ".##.."),
+    "k": ("#....", "#....", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "....."),
+    "l": (".##..", "..#..", "..#..", "..#..", "..#..", "..#..", ".###.", "....."),
+    "m": (".....", ".....", "##.#.", "#.#.#", "#.#.#", "#.#.#", "#.#.#", "....."),
+    "n": (".....", ".....", "####.", "#...#", "#...#", "#...#", "#...#", "....."),
+    "o": (".....", ".....", ".###.", "#...#", "#...#", "#...#", ".###.", "....."),
+    "p": (".....", ".....", "####.", "#...#", "#...#", "####.", "#....", "#...."),
+    "q": (".....", ".....", ".####", "#...#", "#...#", ".####", "....#", "....#"),
+    "r": (".....", ".....", "#.##.", "##..#", "#....", "#....", "#....", "....."),
+    "s": (".....", ".....", ".####", "#....", ".###.", "....#", "####.", "....."),
+    "t": (".#...", ".#...", "####.", ".#...", ".#...", ".#...", "..##.", "....."),
+    "u": (".....", ".....", "#...#", "#...#", "#...#", "#...#", ".####", "....."),
+    "v": (".....", ".....", "#...#", "#...#", "#...#", ".#.#.", "..#..", "....."),
+    "w": (".....", ".....", "#...#", "#.#.#", "#.#.#", "##.##", "#...#", "....."),
+    "x": (".....", ".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "....."),
+    "y": (".....", ".....", "#...#", "#...#", "#...#", ".####", "....#", ".###."),
+    "z": (".....", ".....", "#####", "...#.", "..#..", ".#...", "#####", "....."),
+    "0": (".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###.", "....."),
+    "1": ("..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###.", "....."),
+    "2": (".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####", "....."),
+    "3": ("####.", "....#", "....#", ".###.", "....#", "....#", "####.", "....."),
+    "4": ("...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#.", "....."),
+    "5": ("#####", "#....", "####.", "....#", "....#", "#...#", ".###.", "....."),
+    "6": (".###.", "#....", "#....", "####.", "#...#", "#...#", ".###.", "....."),
+    "7": ("#####", "....#", "...#.", "...#.", "..#..", "..#..", "..#..", "....."),
+    "8": (".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###.", "....."),
+    "9": (".###.", "#...#", "#...#", ".####", "....#", "....#", ".###.", "....."),
+    " ": (".....", ".....", ".....", ".....", ".....", ".....", ".....", "....."),
+    ".": (".....", ".....", ".....", ".....", ".....", ".....", ".##..", ".##.."),
+    ",": (".....", ".....", ".....", ".....", ".....", ".##..", ".##..", ".#..."),
+    ":": (".....", ".##..", ".##..", ".....", ".##..", ".##..", ".....", "....."),
+    ";": (".....", ".##..", ".##..", ".....", ".##..", ".##..", ".#...", "....."),
+    "!": ("..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#..", "....."),
+    "?": (".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#..", "....."),
+    "'": ("..#..", "..#..", ".#...", ".....", ".....", ".....", ".....", "....."),
+    '"': (".#.#.", ".#.#.", ".#.#.", ".....", ".....", ".....", ".....", "....."),
+    "(": ("...#.", "..#..", ".#...", ".#...", ".#...", "..#..", "...#.", "....."),
+    ")": (".#...", "..#..", "...#.", "...#.", "...#.", "..#..", ".#...", "....."),
+    "-": (".....", ".....", ".....", ".###.", ".....", ".....", ".....", "....."),
+    "/": ("....#", "....#", "...#.", "..#..", ".#...", "#....", "#....", "....."),
+    "%": ("##..#", "##.#.", "...#.", "..#..", ".#...", "#.##.", "#..##", "....."),
+    "$": ("..#..", ".####", "#.#..", ".###.", "..#.#", "####.", "..#..", "....."),
+    "&": (".##..", "#..#.", "#.#..", ".#...", "#.#.#", "#..#.", ".##.#", "....."),
+    "+": (".....", "..#..", "..#..", ".###.", "..#..", "..#..", ".....", "....."),
+    "=": (".....", ".....", ".###.", ".....", ".###.", ".....", ".....", "....."),
+    "*": (".....", ".#.#.", ".###.", "#####", ".###.", ".#.#.", ".....", "....."),
+    "#": (".#.#.", ".#.#.", "#####", ".#.#.", "#####", ".#.#.", ".#.#.", "....."),
+    "@": (".###.", "#...#", "#.###", "#.#.#", "#.###", "#....", ".###.", "....."),
+    "_": (".....", ".....", ".....", ".....", ".....", ".....", "#####", "....."),
+    "|": ("..#..", "..#..", "..#..", "..#..", "..#..", "..#..", "..#..", "....."),
 }
-for _glyph in GLYPHS.values():
-    assert len(_glyph) == 7 and all(len(row) == 5 for row in _glyph)
 
-_FOLD = {
-    "’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "‐": "-",
-    "é": "e", "è": "e", "ê": "e", "á": "a", "í": "i", "ó": "o",
-    "ú": "u", "ñ": "n", "ü": "u", "ç": "c",
-}
+# Characters the text asked for that the font does not have, collected
+# while drawing so a missing glyph is reported instead of silently lost.
+MISSING = set()
 
-
-def normalise(text):
-    """Upper-case the text and map unsupported characters to ASCII."""
-    out = []
-    for ch in text:
-        ch = _FOLD.get(ch, ch)
-        out.append(ch.upper() if ch.isalpha() else ch)
-    return "".join(out)
+# The font table must be exactly 8 rows of 5 cells each; fail loudly
+# here rather than drawing a broken page.
+for _ch, _rows in FONT.items():
+    assert len(_rows) == 8, _ch
+    for _row in _rows:
+        assert len(_row) == 5 and set(_row) <= {"#", "."}, (_ch, _row)
 
 
-def measure(text, size):
-    return len(normalise(text)) * 6 * size
+# ---------------------------------------------------------------------------
+# Canvas: an RGB image held as one flat bytearray, plus the drawing
+# primitives the page needs.  All coordinates are clipped to the page.
+# ---------------------------------------------------------------------------
 
-
-def wrap_text(text, width_px, size):
-    """Split cleaned text into lines no wider than width_px."""
-    per_line = max(1, width_px // (6 * size))
-    words = normalise(text).split(" ")
-    lines, current = [], ""
-    for word in words:
-        if not current:
-            current = word
-        elif len(current) + 1 + len(word) <= per_line:
-            current += " " + word
-        else:
-            lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    return lines
-
-
-# ------------------------------------------------------------------ canvas
 class Page:
-    """A flat RGB canvas with tiny drawing helpers."""
+    def __init__(self):
+        self.buf = bytearray(PAPER * (WIDTH * HEIGHT))
 
-    def __init__(self, w, h, background):
-        self.w, self.h = w, h
-        self.pixels = bytearray(bytes(background) * (w * h))
+    def px(self, x, y, color):
+        if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+            i = (y * WIDTH + x) * 3
+            self.buf[i:i + 3] = bytes(color)
 
-    def put(self, x, y, colour):
-        if 0 <= x < self.w and 0 <= y < self.h:
-            i = (y * self.w + x) * 3
-            self.pixels[i:i + 3] = bytes(colour)
-
-    def hbar(self, x0, x1, y, colour):
-        if y < 0 or y >= self.h:
+    def rect(self, x, y, w, h, color):
+        x0 = max(x, 0)
+        y0 = max(y, 0)
+        x1 = min(x + w, WIDTH)
+        y1 = min(y + h, HEIGHT)
+        if x1 <= x0 or y1 <= y0:
             return
-        x0, x1 = max(0, x0), min(self.w - 1, x1)
-        if x1 < x0:
-            return
-        span = bytes(colour) * (x1 - x0 + 1)
-        i = (y * self.w + x0) * 3
-        self.pixels[i:i + len(span)] = span
+        row = bytes(color) * (x1 - x0)
+        for yy in range(y0, y1):
+            i = (yy * WIDTH + x0) * 3
+            self.buf[i:i + 3 * (x1 - x0)] = row
 
-    def vbar(self, x, y0, y1, colour):
-        if x < 0 or x >= self.w:
-            return
-        for y in range(max(0, y0), min(self.h, y1 + 1)):
-            self.put(x, y, colour)
+    def frame(self, x, y, w, h, color, t=2):
+        self.rect(x, y, w, t, color)
+        self.rect(x, y + h - t, w, t, color)
+        self.rect(x, y, t, h, color)
+        self.rect(x + w - t, y, t, h, color)
 
-    def box(self, x, y, w, h, colour):
-        for yy in range(y, y + h):
-            self.hbar(x, x + w - 1, yy, colour)
-
-    def frame(self, x, y, w, h, colour, thick=1):
-        for t in range(thick):
-            self.hbar(x, x + w - 1, y + t, colour)
-            self.hbar(x, x + w - 1, y + h - 1 - t, colour)
-            self.vbar(x + t, y, y + h - 1, colour)
-            self.vbar(x + w - 1 - t, y, y + h - 1, colour)
-
-    def segment(self, x0, y0, x1, y1, colour, thick=1):
-        dx, dy = abs(x1 - x0), abs(y1 - y0)
-        step_x = 1 if x0 < x1 else -1
-        step_y = 1 if y0 < y1 else -1
-        err = dx - dy
+    def line(self, x0, y0, x1, y1, color, t=1):
+        """Bresenham line; t>1 draws a square brush of that size."""
+        dx = abs(x1 - x0)
+        sx = 1 if x0 < x1 else -1
+        dy = -abs(y1 - y0)
+        sy = 1 if y0 < y1 else -1
+        err = dx + dy
         while True:
-            for t in range(thick):
-                self.put(x0 + t, y0, colour)
-                self.put(x0, y0 + t, colour)
+            if t == 1:
+                self.px(x0, y0, color)
+            else:
+                self.rect(x0 - t // 2, y0 - t // 2, t, t, color)
             if x0 == x1 and y0 == y1:
                 break
             e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x0 += step_x
-            if e2 < dx:
+            if e2 >= dy:
+                err += dy
+                x0 += sx
+            if e2 <= dx:
                 err += dx
-                y0 += step_y
+                y0 += sy
 
-    def blob(self, cx, cy, r, colour):
-        for dy in range(-r, r + 1):
-            half = int(math.sqrt(max(0, r * r - dy * dy)))
-            self.hbar(cx - half, cx + half, cy + dy, colour)
+    def polyline(self, points, color, t=1):
+        for (x0, y0), (x1, y1) in zip(points, points[1:]):
+            self.line(x0, y0, x1, y1, color, t)
 
-    def polygon(self, points, colour):
-        top = min(y for _, y in points)
-        bottom = max(y for _, y in points)
-        count = len(points)
-        for y in range(top, bottom + 1):
-            hits = []
-            for i in range(count):
-                x0, y0 = points[i]
-                x1, y1 = points[(i + 1) % count]
-                if (y0 <= y < y1) or (y1 <= y < y0):
-                    hits.append(x0 + (y - y0) * (x1 - x0) / (y1 - y0))
-            hits.sort()
-            for i in range(0, len(hits) - 1, 2):
-                self.hbar(int(hits[i]), int(hits[i + 1]), y, colour)
+    def circle(self, cx, cy, r, color, filled=True):
+        if filled:
+            for dy in range(-r, r + 1):
+                dx = int((r * r - dy * dy) ** 0.5)
+                self.rect(cx - dx, cy + dy, 2 * dx + 1, 1, color)
+        else:
+            steps = max(12, int(2 * math.pi * r))
+            for i in range(steps):
+                a = 2 * math.pi * i / steps
+                self.rect(cx + int(r * math.cos(a)) - 1,
+                          cy + int(r * math.sin(a)) - 1, 2, 2, color)
 
-    def starburst(self, cx, cy, outer, inner, points, colour):
-        pts = []
-        for i in range(points * 2):
-            r = outer if i % 2 == 0 else inner
-            angle = math.pi * i / points - math.pi / 2
-            pts.append((int(cx + r * math.cos(angle)),
-                        int(cy + r * math.sin(angle))))
-        self.polygon(pts, colour)
+    def triangle(self, p1, p2, p3, color):
+        """Filled triangle, scanline by scanline."""
+        (x0, y0), (x1, y1), (x2, y2) = sorted(
+            (p1, p2, p3), key=lambda p: p[1])
 
-    def curve(self, cx, cy, r, a0, a1, colour, thick=2):
-        steps = max(8, int(abs(a1 - a0) * r / 4))
-        prev = None
-        for i in range(steps + 1):
-            a = a0 + (a1 - a0) * i / steps
-            p = (int(cx + r * math.cos(a)), int(cy + r * math.sin(a)))
-            if prev is not None:
-                self.segment(prev[0], prev[1], p[0], p[1], colour, thick)
-            prev = p
+        def edge_x(xa, ya, xb, yb, y):
+            if yb == ya:
+                return float(xa)
+            return xa + (xb - xa) * (y - ya) / (yb - ya)
 
-    # --------------------------------------------------------------- text
-    def print_text(self, x, y, text, size, colour):
-        text = normalise(text)
-        cursor = x
-        for ch in text:
-            glyph = GLYPHS.get(ch, GLYPHS["?"])
-            for row in range(7):
-                bits = glyph[row]
-                for col in range(5):
-                    if bits[col] == "#":
-                        self.box(cursor + col * size, y + row * size,
-                                 size, size, colour)
-            cursor += 6 * size
-        return cursor - x
+        for y in range(y0, y2 + 1):
+            if y < y1:
+                xa = edge_x(x0, y0, x1, y1, y)
+            else:
+                xa = edge_x(x1, y1, x2, y2, y)
+            xb = edge_x(x0, y0, x2, y2, y)
+            xs, xe = int(min(xa, xb)), int(max(xa, xb))
+            self.rect(xs, y, xe - xs + 1, 1, color)
 
-    def centred(self, y, text, size, colour):
-        w = measure(text, size)
-        self.print_text((WIDTH - w) // 2, y, text, size, colour)
+    # -- text ---------------------------------------------------------------
 
-    def block(self, x, y, lines, size, colour, gap=17):
-        for line in lines:
-            self.print_text(x, y, line, size, colour)
-            y += gap
+    def text_w(self, s, scale):
+        return max(0, len(s) * 6 * scale - scale)
+
+    def text(self, x, y, s, scale, color):
+        cx = x
+        for ch in s:
+            glyph = FONT.get(ch)
+            if glyph is None:
+                MISSING.add(ch)
+                cx += 6 * scale
+                continue
+            for r, row in enumerate(glyph):
+                for col, bit in enumerate(row):
+                    if bit == "#":
+                        self.rect(cx + col * scale, y + r * scale,
+                                  scale, scale, color)
+            cx += 6 * scale
+        return cx
+
+    def text_center(self, cx, y, s, scale, color):
+        self.text(cx - self.text_w(s, scale) // 2, y, s, scale, color)
+
+    def wrap(self, s, max_w, scale):
+        """Greedy word wrap; returns a list of lines that fit max_w."""
+        lines = []
+        for chunk in s.split("\n"):
+            words = chunk.split(" ")
+            cur = ""
+            for w in words:
+                trial = (cur + " " + w).strip()
+                if self.text_w(trial, scale) <= max_w or not cur:
+                    cur = trial
+                else:
+                    lines.append(cur)
+                    cur = w
+            if cur:
+                lines.append(cur)
+        return lines
+
+    def para(self, x, y, s, scale, max_w, color, lh=None):
+        """Draw a wrapped paragraph; returns the y just below it."""
+        if lh is None:
+            lh = 8 * scale + 3
+        for line in self.wrap(s, max_w, scale):
+            self.text(x, y, line, scale, color)
+            y += lh
         return y
 
 
-# --------------------------------------------------------------------- png
-def _png_chunk(tag, data):
-    return (struct.pack(">I", len(data)) + tag + data +
-            struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+# ---------------------------------------------------------------------------
+# PNG writer: my own minimal encoder.  8-bit RGB, colour type 2, no
+# interlace, one IDAT chunk holding zlib-compressed scanlines, each
+# prefixed with filter byte 0.  zlib output is deterministic, so the
+# whole file is byte-identical on every run.
+# ---------------------------------------------------------------------------
+
+def _chunk(kind, data):
+    return (struct.pack(">I", len(data)) + kind + data +
+            struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
 
 
-def write_png(page):
+def encode_png(buf, width, height):
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     raw = bytearray()
-    stride = page.w * 3
-    for y in range(page.h):
-        raw.append(0)  # filter type: none
-        raw += page.pixels[y * stride:(y + 1) * stride]
-    header = struct.pack(">IIBBBBB", page.w, page.h, 8, 2, 0, 0, 0)
-    return (b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", header) +
-            _png_chunk(b"IDAT", zlib.compress(bytes(raw), 9)) +
-            _png_chunk(b"IEND", b""))
+    row_len = width * 3
+    for y in range(height):
+        raw.append(0)
+        raw += buf[y * row_len:(y + 1) * row_len]
+    idat = zlib.compress(bytes(raw), 9)
+    return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) +
+            _chunk(b"IDAT", idat) + _chunk(b"IEND", b""))
 
 
-# ------------------------------------------------------------------ layout
-MARGIN = 28
-RIGHT = WIDTH - MARGIN
+# ---------------------------------------------------------------------------
+# Small hand-drawn pictures.  Each takes the top-left corner of its box
+# and draws inside it with the primitives above.  Nothing is traced or
+# copied: every picture is a few rectangles, triangles and circles.
+# ---------------------------------------------------------------------------
+
+def pic_chip(p, x, y, w, h):
+    """Headline picture: a chip with pins and a rising market arrow."""
+    p.rect(x, y, w, h, LIGHT)
+    p.text(x + 14, y + 10, "+31%", 4, GREEN)
+    # Arrow climbing from lower left to upper right.
+    p.polyline([(x + 18, y + 222), (x + 150, y + 150), (x + 300, y + 76)],
+               GREEN, t=4)
+    p.line(x + 300, y + 76, x + 276, y + 82, GREEN, t=4)
+    p.line(x + 300, y + 76, x + 292, y + 100, GREEN, t=4)
+    # Chip body with pins on all four sides.
+    cx, cy, s = x + 150, y + 96, 100
+    for i in range(5):
+        off = 8 + i * 20
+        p.rect(cx + off, cy - 14, 10, 14, DARK_BLUE)
+        p.rect(cx + off, cy + s, 10, 14, DARK_BLUE)
+        p.rect(cx - 14, cy + off, 14, 10, DARK_BLUE)
+        p.rect(cx + s, cy + off, 14, 10, DARK_BLUE)
+    p.rect(cx, cy, s, s, DARK_BLUE)
+    p.rect(cx + 18, cy + 18, s - 36, s - 36, BLUE)
+    p.rect(cx + 34, cy + 34, s - 68, s - 68, DARK_BLUE)
+    p.text(cx + s // 2 - p.text_w("GPU", 3) // 2, cy + s // 2 - 12,
+           "GPU", 3, WHITE)
+    p.text(x + 14, y + h - 22, "THE CHIPMAKER'S COMEBACK", 1, GREY)
 
 
-def masthead(pg):
-    pg.centred(30, "THE WORLD TODAY", 6, INK)
-    pg.hbar(MARGIN, RIGHT - 1, 84, INK)
-    pg.centred(92, "TUESDAY, 24 NOVEMBER 2026", 2, RED)
-    pg.hbar(MARGIN, RIGHT - 1, 116, INK)
-    pg.hbar(MARGIN, RIGHT - 1, 120, INK)
+def pic_drone(p, x, y, w, h):
+    """Mexico: a surveillance drone over mountain ridges."""
+    p.rect(x, y, w, h, SKY)
+    p.circle(x + 104, y + 18, 10, ORANGE)
+    p.triangle((x - 4, y + h), (x + 52, y + 52), (x + 108, y + h), MID_GREY)
+    p.triangle((x + 56, y + h), (x + 96, y + 66), (x + 132, y + h), GREY)
+    # Drone body, arms, spinning rotors and legs.
+    p.rect(x + 46, y + 30, 36, 10, INK)
+    p.line(x + 50, y + 35, x + 34, y + 26, INK, t=2)
+    p.line(x + 78, y + 35, x + 94, y + 26, INK, t=2)
+    p.rect(x + 22, y + 24, 26, 3, INK)
+    p.rect(x + 80, y + 24, 26, 3, INK)
+    p.line(x + 54, y + 40, x + 54, y + 48, INK, t=2)
+    p.line(x + 74, y + 40, x + 74, y + 48, INK, t=2)
+    p.circle(x + 64, y + 35, 3, RED)
 
 
-def headline_art(pg):
-    """Nvidia: a chip on a dark board, a green arrow climbing past it."""
-    x0, y0, x1, y1 = 652, 140, RIGHT, 420
-    pg.box(x0, y0, x1 - x0, y1 - y0, NAVY)
-    pg.print_text(x0 + 16, y0 + 14, "SANTA CLARA, CALIFORNIA", 2, GOLD)
-    # circuit traces
-    for ty in (y0 + 60, y0 + 96, y0 + 132, y0 + 168):
-        pg.hbar(x0 + 12, x0 + 120, ty, (44, 66, 104))
-    pg.vbar(x0 + 120, y0 + 60, y0 + 168, (44, 66, 104))
-    # the chip
-    cx, cy = 780, 268
-    pg.box(cx - 58, cy - 58, 116, 116, CHIPGREEN)
-    pg.frame(cx - 58, cy - 58, 116, 116, DARKGREEN, 3)
-    for pin in range(-2, 3):
-        pg.box(cx + pin * 24 - 3, cy - 72, 6, 14, GOLD)
-        pg.box(cx + pin * 24 - 3, cy + 58, 6, 14, GOLD)
-        pg.box(cx - 72, cy + pin * 24 - 3, 14, 6, GOLD)
-        pg.box(cx + 58, cy + pin * 24 - 3, 14, 6, GOLD)
-    pg.box(cx - 34, cy - 34, 68, 68, DARKGREEN)
-    pg.print_text(cx - 22, cy - 12, "NVDA", 2, WHITE)
-    # climbing arrow
-    pts = [(848, 340), (878, 300), (906, 316), (936, 244), (952, 258),
-           (952, 236), (936, 224), (912, 288), (884, 274), (856, 312)]
-    pg.polygon(pts, (64, 220, 110))
-    pg.print_text(x0 + 16, y1 - 52, "SHARES +31% IN A DAY", 2, (64, 220, 110))
-    pg.hbar(x0, x1 - 1, y1 - 1, GOLD)
-    pg.print_text(x0 + 16, y1 - 26, "NASDAQ +6.5% - S&P +4.7%", 2, WHITE)
+def pic_capitol(p, x, y, w, h):
+    """USA: a domed capitol building with a flag."""
+    p.rect(x, y, w, h, LIGHT)
+    p.line(x + 64, y + 16, x + 64, y + 34, INK, t=2)
+    p.rect(x + 64, y + 16, 16, 10, RED)
+    p.circle(x + 64, y + 58, 24, INK)
+    p.rect(x + 38, y + 58, 52, 26, LIGHT)  # keep only the dome cap
+    p.rect(x + 20, y + 58, 88, 44, GREY)
+    for col in range(5):
+        p.rect(x + 28 + col * 17, y + 62, 6, 34, WHITE)
+    p.rect(x + 14, y + 102, 100, 6, INK)
 
 
-def headline(pg):
-    pg.print_text(MARGIN, 140, "TECH - NVIDIA", 2, RED)
-    pg.print_text(MARGIN, 166, "HUANG IS", 5, INK)
-    pg.print_text(MARGIN, 208, "BACK AT", 5, INK)
-    pg.print_text(MARGIN, 250, "NVIDIA", 5, INK)
-    deck = wrap_text(
-        "Eleven days after he quit as chief executive, Jensen Huang is "
-        "back running the chipmaker he co-founded. Shares jump 31% and "
-        "lift the Nasdaq 6.5%.", 600, 2)
-    y = pg.block(MARGIN, 306, deck, 2, GREY)
-    deck2 = wrap_text(
-        "Trump pressed for his return. US lawmakers vowed to keep "
-        "probing Nvidia.", 600, 2)
-    y = pg.block(MARGIN, y + 8, deck2, 2, GREY)
-    y += 12
-    pg.hbar(MARGIN, 620, y, RED)
-    pg.print_text(MARGIN, y + 8, "BOARD: RETURN POSED NO RISK", 2, RED)
+def pic_document(p, x, y, w, h):
+    """China: a sealed document."""
+    p.rect(x, y, w, h, LIGHT)
+    p.rect(x + 32, y + 12, 62, 86, WHITE)
+    p.frame(x + 32, y + 12, 62, 86, INK, t=2)
+    for i in range(4):
+        p.rect(x + 40, y + 24 + i * 12, 46, 3, MID_GREY)
+    # Red seal stamped over the corner of the page.
+    p.circle(x + 88, y + 82, 13, RED)
+    p.circle(x + 88, y + 82, 8, WHITE)
+    p.circle(x + 88, y + 82, 3, RED)
 
 
-# --------------------------------------------------------- story pictures
-def art_drone(pg, x, y):
-    """Surveillance drone over a desert ridge."""
-    pg.box(x, y, 72, 72, SAND)
-    pg.box(x, y + 48, 72, 24, (150, 104, 60))
-    pg.polygon([(x + 8, y + 52), (x + 30, y + 42), (x + 52, y + 50),
-                (x + 64, y + 58), (x + 40, y + 62), (x + 16, y + 60)],
-               (120, 82, 46))
-    pg.box(x + 28, y + 26, 16, 10, INK)
-    pg.segment(x + 16, y + 22, x + 28, y + 28, INK, 2)
-    pg.segment(x + 56, y + 22, x + 44, y + 28, INK, 2)
-    pg.segment(x + 10, y + 18, x + 24, y + 22, INK, 2)
-    pg.segment(x + 62, y + 18, x + 48, y + 22, INK, 2)
-    pg.segment(x + 24, y + 32, x + 34, y + 40, RED, 2)
-    pg.segment(x + 48, y + 32, x + 38, y + 40, RED, 2)
+def pic_sudan(p, x, y, w, h):
+    """Sudan: buildings in Khartoum with smoke rising."""
+    p.rect(x, y, w, h, SKY)
+    p.circle(x + 30, y + 36, 8, MID_GREY)
+    p.circle(x + 40, y + 24, 10, MID_GREY)
+    p.circle(x + 28, y + 12, 7, MID_GREY)
+    p.rect(x + 12, y + 50, 34, 62, INK)
+    p.rect(x + 58, y + 66, 42, 46, GREY)
+    for r in range(3):
+        for c in range(2):
+            p.rect(x + 18 + c * 14, y + 58 + r * 14, 6, 6, PAPER)
+    for r in range(2):
+        for c in range(2):
+            p.rect(x + 64 + c * 16, y + 74 + r * 14, 6, 6, PAPER)
+    p.line(x + 92, y + 66, x + 92, y + 48, INK, t=2)
+    p.rect(x + 92, y + 48, 14, 9, BLUE)
 
 
-def art_capitol(pg, x, y):
-    """US Capitol dome and columns."""
-    pg.box(x, y, 72, 72, NAVY)
-    pg.blob(x + 36, y + 30, 15, WHITE)
-    pg.box(x + 22, y + 30, 28, 6, WHITE)
-    for cx in (x + 25, x + 33, x + 41):
-        pg.box(cx, y + 36, 4, 18, WHITE)
-    pg.box(x + 18, y + 54, 36, 4, WHITE)
-    pg.box(x + 34, y + 10, 4, 8, GOLD)
-    pg.box(x + 12, y + 60, 48, 4, GOLD)
+def pic_factory_fire(p, x, y, w, h):
+    """Indonesia: a factory with a chimney, flames and smoke."""
+    p.rect(x, y, w, h, LIGHT)
+    p.circle(x + 100, y + 16, 8, MID_GREY)
+    p.circle(x + 92, y + 28, 6, MID_GREY)
+    p.rect(x + 88, y + 34, 14, 78, INK)
+    p.rect(x + 12, y + 64, 72, 48, INK)
+    for i in range(3):
+        p.triangle((x + 12 + i * 24, y + 64), (x + 24 + i * 24, y + 48),
+                   (x + 36 + i * 24, y + 64), INK)
+    p.triangle((x + 26, y + 52), (x + 42, y + 24), (x + 58, y + 52), ORANGE)
+    p.triangle((x + 34, y + 52), (x + 42, y + 34), (x + 50, y + 52), RED)
+    for c in range(3):
+        p.rect(x + 20 + c * 22, y + 74, 10, 10, PAPER)
 
 
-def art_seal(pg, x, y):
-    """A sealed document."""
-    pg.box(x, y, 72, 72, (238, 234, 222))
-    pg.box(x + 18, y + 10, 36, 50, WHITE)
-    pg.frame(x + 18, y + 10, 36, 50, INK, 1)
-    pg.hbar(x + 22, x + 50, y + 18, INK)
-    pg.hbar(x + 22, x + 50, y + 26, INK)
-    pg.hbar(x + 22, x + 50, y + 34, INK)
-    pg.blob(x + 36, y + 48, 9, RED)
-    pg.starburst(x + 36, y + 48, 6, 3, 5, GOLD)
+def pic_japan(p, x, y, w, h):
+    """Japan: factory output bars climbing, with the PMI reading."""
+    p.rect(x, y, w, h, LIGHT)
+    p.text(x + 12, y + 10, "PMI 53.7", 2, INK)
+    p.rect(x + 18, y + 82, 18, 30, BLUE)
+    p.rect(x + 46, y + 66, 18, 46, BLUE)
+    p.rect(x + 74, y + 50, 18, 62, BLUE)
+    p.polyline([(x + 14, y + 96), (x + 46, y + 74), (x + 84, y + 54),
+                (x + 116, y + 34)], GREEN, t=3)
+    p.line(x + 116, y + 34, x + 100, y + 38, GREEN, t=3)
+    p.line(x + 116, y + 34, x + 110, y + 50, GREEN, t=3)
 
 
-def art_un(pg, x, y):
-    """A blue UN-style building under a dark sky."""
-    pg.box(x, y, 72, 72, (30, 40, 60))
-    pg.box(x + 16, y + 18, 40, 44, SKYBLUE)
-    for row in range(5):
-        for col in range(4):
-            pg.box(x + 20 + col * 9, y + 22 + row * 8, 5, 4, WHITE)
-    pg.blob(x + 36, y + 10, 6, WHITE)
-    pg.segment(x + 30, y + 12, x + 42, y + 8, WHITE, 2)
-    pg.segment(x + 30, y + 8, x + 42, y + 12, WHITE, 2)
-    pg.starburst(x + 58, y + 14, 8, 3, 8, ORANGE)
-    pg.blob(x + 58, y + 14, 3, GOLD)
-
-
-def art_factory(pg, x, y):
-    """Factory chimneys with smoke and a flame."""
-    pg.box(x, y, 72, 72, (64, 62, 58))
-    pg.box(x + 10, y + 40, 52, 24, (42, 40, 38))
-    pg.box(x + 14, y + 16, 8, 26, (42, 40, 38))
-    pg.box(x + 26, y + 24, 8, 18, (42, 40, 38))
-    pg.blob(x + 18, y + 10, 7, (205, 205, 205))
-    pg.blob(x + 30, y + 6, 6, (205, 205, 205))
-    pg.starburst(x + 48, y + 34, 12, 5, 8, ORANGE)
-    pg.blob(x + 48, y + 34, 4, GOLD)
-
-
-def art_bars(pg, x, y):
-    """A rising bar chart."""
-    pg.box(x, y, 72, 72, LIGHT)
-    pg.hbar(x + 8, x + 64, y + 60, INK)
-    pg.vbar(x + 8, y + 12, y + 60, INK)
-    heights = [14, 20, 18, 28, 36]
-    for i, h in enumerate(heights):
-        pg.box(x + 14 + i * 10, y + 60 - h, 7, h, GREEN if i < 4 else RED)
-    pg.segment(x + 12, y + 44, x + 62, y + 16, RED, 3)
-    pg.polygon([(x + 62, y + 16), (x + 56, y + 16), (x + 62, y + 22)],
-               RED)
-
+# ---------------------------------------------------------------------------
+# The front page itself.
+# ---------------------------------------------------------------------------
 
 STORIES = [
-    dict(kicker="MEXICO", colour=TEAL, art=art_drone,
-         title="US DRONE HELPED CATCH DRUG LORD",
-         body="Mexico says a US surveillance drone helped track 'El "
-              "Chapo Isidro' in Sinaloa. His capture set off clashes "
-              "that left 20 people dead."),
-    dict(kicker="USA", colour=NAVY, art=art_capitol,
-         title="CONGRESSMAN GOMEZ TO RESIGN",
-         body="Rep. Jimmy Gomez quits from Dec 1 after a House Ethics "
-              "report found substantial evidence of sexual misconduct "
-              "toward a staffer."),
-    dict(kicker="CHINA", colour=RED, art=art_seal,
-         title="DEATH SENTENCE FOR SPYING",
-         body="An official surnamed Ma is sentenced to death for "
-              "leaking 35 state secrets to a foreign agency for over "
-              "$150,000, state media say."),
-    dict(kicker="SUDAN", colour=SKYBLUE, art=art_un,
-         title="DRONES HIT UN BUILDING",
-         body="Drone strikes hit homes and the UN building in "
-              "Khartoum, the capital, early on Tuesday, reports say."),
-    dict(kicker="INDONESIA", colour=ORANGE, art=art_factory,
-         title="MORE BODIES FOUND AT FACTORY",
-         body="Rescuers recover more remains from the candy factory "
-              "fire in Cikande. The search goes on for 34 missing "
-              "workers."),
-    dict(kicker="JAPAN", colour=GREEN, art=art_bars,
-         title="JAPAN FACTORIES PICK UP",
-         body="Factory activity grows faster in November, flash PMI "
-              "53.7, as output and export orders rise on chip "
-              "demand."),
+    # (tag, headline, body, picture)
+    ("MEXICO",
+     "US DRONE HELPED TRACK EL CHAPO ISIDRO",
+     "A US surveillance drone helped Mexican forces track the cartel "
+     "leader known as El Chapo Isidro in Sinaloa, officials said. His "
+     "capture set off clashes that left 20 people dead.",
+     pic_drone),
+    ("WASHINGTON",
+     "CONGRESSMAN QUITS OVER ETHICS REPORT",
+     "Rep. Jimmy Gomez will resign effective Dec. 1 after a House Ethics "
+     "Committee report found substantial evidence of sexual misconduct "
+     "toward a staffer, the panel said.",
+     pic_capitol),
+    ("BEIJING",
+     "DEATH SENTENCE FOR LEAKING SECRETS",
+     "A Chinese official surnamed Ma was sentenced to death for leaking "
+     "35 state secrets to a foreign agency for more than $150,000, state "
+     "media reported.",
+     pic_document),
+    ("KHARTOUM",
+     "DRONE STRIKES HIT KHARTOUM",
+     "Drone strikes hit homes and the United Nations building in "
+     "Khartoum early on Tuesday, witnesses said, as fighting in the "
+     "capital continued.",
+     pic_sudan),
+    ("JAKARTA",
+     "MORE BODIES FOUND AFTER FACTORY FIRE",
+     "More remains were recovered from the Cikande candy factory fire, "
+     "officials said, as the search continues for 34 missing workers.",
+     pic_factory_fire),
+    ("TOKYO",
+     "JAPAN FACTORIES GROW FASTER",
+     "Japanese factory activity grew faster in November, with the flash "
+     "PMI at 53.7, helped by demand for chips, a business survey showed.",
+     pic_japan),
 ]
 
+ALSO_TODAY = (
+    "FIFA confirms the US will co-host the 2031 Women's World Cup, with "
+    "the UK hosting in 2035. | The WFP warns wars threaten food aid for "
+    "7.3m more people. | Trump orders executions to be expedited. | "
+    "Virginia and Oregon sue SpaceX over Grok deepfakes."
+)
 
-def story_block(pg, x, y, w, story):
-    pg.hbar(x, x + w - 1, y, story["colour"])
-    pg.hbar(x, x + w - 1, y + 2, story["colour"])
-    story["art"](pg, x, y + 12)
-    tx = x + 84
-    tw = w - 84
-    pg.print_text(tx, y + 12, story["kicker"], 2, story["colour"])
-    yy = pg.block(tx, y + 34, wrap_text(story["title"], tw, 2), 2, INK)
-    pg.block(tx, yy + 4, wrap_text(story["body"], tw, 2), 2, GREY)
-
-
-def story_grid(pg):
-    col_w = 472
-    xs = [MARGIN, 524]
-    ys = [452, 616, 780]
-    for i, story in enumerate(STORIES):
-        story_block(pg, xs[i % 2], ys[i // 2], col_w, story)
+SOURCES = ("Sources: Reuters, AFP, Associated Press, CNN, The Manila "
+           "Times. Drawn and typeset by a program; no photographs "
+           "were used.")
 
 
-def footer(pg):
-    y = 940
-    pg.print_text(MARGIN, y, "ALSO TODAY:", 2, RED)
-    items = ("FIFA confirms the US will co-host the 2031 Women's World "
-             "Cup, UK gets 2035 - WFP warns wars threaten food aid for "
-             "7.3m more people - Trump orders executions to be "
-             "expedited - Virginia and Oregon sue SpaceX over Grok "
-             "deepfakes")
-    lead = MARGIN + measure("ALSO TODAY: ", 2)
-    first_w = WIDTH - 2 * MARGIN - measure("ALSO TODAY: ", 2)
-    first_line = wrap_text(items, first_w, 2)[0]
-    pg.print_text(lead, y, first_line, 2, INK)
-    rest = items[len(first_line):].strip()
-    yy = y + 17
-    for line in wrap_text(rest, WIDTH - 2 * MARGIN, 2):
-        pg.print_text(MARGIN, yy, line, 2, INK)
-        yy += 17
-    pg.hbar(MARGIN, RIGHT - 1, 990, INK)
-    pg.centred(998, "SOURCES: AP - REUTERS - AFP - CNN - THE MANILA "
-                     "TIMES - THE JAPAN TIMES", 2, GREY)
+def draw_front_page(p):
+    # Masthead.
+    p.rect(28, 16, 968, 3, INK)
+    p.text_center(512, 28, "THE OTTER TIMES", 8, INK)
+    p.text(28, 96, "EST. 2026", 1, GREY)
+    p.text(996 - p.text_w("FREE", 1), 96, "FREE", 1, GREY)
+    p.text_center(512, 92, "Tuesday, 24 November 2026", 2, INK)
+    p.rect(28, 116, 968, 3, INK)
+    p.rect(28, 122, 968, 1, INK)
 
+    # Headline story: Nvidia.
+    p.rect(28, 134, 12, 12, RED)
+    p.text(46, 135, "TOP STORY", 1, RED)
+    p.text(28, 150, "HUANG RETURNS", 5, INK)
+    p.text(28, 196, "AS NVIDIA CEO", 5, INK)
+    p.para(28, 248,
+           "Shares jump 31% as the founder takes back the top job 11 days "
+           "after quitting. The Nasdaq climbs 6.5%.",
+           2, 600, INK, lh=20)
+    p.para(28, 318,
+           "Jensen Huang is chief executive of Nvidia again, 11 days "
+           "after he stepped down, the company said on Monday. Investors "
+           "welcomed the return, and the Nasdaq rose 6.5% on the day. "
+           "The brief handover ends after a turbulent spell at the "
+           "chipmaker, whose processors power much of the AI boom.",
+           1, 600, INK, lh=11)
+    p.rect(28, 366, 600, 1, GREY)
+    p.text(28, 378, "NVIDIA +31%   NASDAQ +6.5%   11 DAYS OUT", 2, INK)
+    p.frame(648, 134, 348, 250, INK, t=2)
+    pic_chip(p, 650, 136, 344, 246)
 
-def render():
-    pg = Page(WIDTH, HEIGHT, PAPER)
-    masthead(pg)
-    headline_art(pg)
-    headline(pg)
-    pg.hbar(MARGIN, RIGHT - 1, 436, INK)
-    story_grid(pg)
-    footer(pg)
-    return pg
+    # Rule, then the six stories in a 2 x 3 grid.
+    p.rect(28, 396, 968, 2, INK)
+    cell_w, cell_h = 474, 164
+    for i, (tag, headline, body, pic) in enumerate(STORIES):
+        cx = 28 + (i % 2) * (cell_w + 20)
+        cy = 408 + (i // 2) * (cell_h + 10)
+        p.frame(cx, cy, 128, 112, INK, t=2)
+        pic(p, cx + 2, cy + 2, 124, 108)
+        p.text(cx + 140, cy, tag, 1, RED)
+        p.para(cx + 140, cy + 12, headline, 2, 334, INK, lh=20)
+        p.para(cx, cy + 120, body, 1, 474, INK, lh=11)
+
+    # Also today, then the sources line.
+    p.rect(28, 922, 968, 2, INK)
+    p.rect(28, 932, 12, 12, RED)
+    p.text(46, 933, "ALSO TODAY", 2, INK)
+    p.para(28, 954, ALSO_TODAY, 1, 968, INK, lh=11)
+    p.text(28, 984, SOURCES, 1, GREY)
 
 
 def main():
-    outdir = os.environ.get("MAKEFUN_OUTPUT_DIR", "out")
-    os.makedirs(outdir, exist_ok=True)
-    data = write_png(render())
-    path = os.path.join(outdir, "entry.png")
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "out"
+    os.makedirs(out_dir, exist_ok=True)
+    page = Page()
+    draw_front_page(page)
+    data = encode_png(page.buf, WIDTH, HEIGHT)
+    path = os.path.join(out_dir, "entry.png")
     with open(path, "wb") as f:
         f.write(data)
-    print(f"wrote {path} ({len(data)} bytes)")
+    if MISSING:
+        print("warning: no glyph for:", sorted(MISSING), file=sys.stderr)
+    print("wrote %s (%d bytes)" % (path, len(data)))
+    print("sha256:", hashlib.sha256(data).hexdigest())
 
 
 if __name__ == "__main__":

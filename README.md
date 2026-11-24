@@ -1,50 +1,61 @@
-[![make.fun](https://make.fun/badge/news-image-20261124.svg)](https://make.fun/c/news-image-20261124)
-[![Rank](https://make.fun/badge/news-image-20261124/StarsN/makefun-news-image-20261124/rank.svg)](https://make.fun/c/news-image-20261124)
-[![Reward](https://make.fun/badge/news-image-20261124/StarsN/makefun-news-image-20261124/reward.svg)](https://make.fun/c/news-image-20261124)
+# The World in One Picture — 24 November 2026
 
-# The World Today — Tuesday, 24 November 2026
+[![make.fun](https://img.shields.io/badge/make.fun-news--image--20261124-blue)](https://make.fun/c/news-image-20261124)
+[![Python](https://img.shields.io/badge/python-3%20%E2%80%A2%20stdlib%20only-green)](https://make.fun/c/news-image-20261124)
 
-An entry for the [make.fun bounty](https://make.fun/c/news-image-20261124)
-([bounty page](https://make.fun/bounty/news-image-20261124)): sum up the
-world's news of Tuesday 24 November 2026 in one 1024×1024 image.
+An entry for the make.fun bounty [news-image-20261124](https://make.fun/c/news-image-20261124):
+sum up 24 November's world news in one image.
 
-`main.py` (pure Python standard library, no network) draws a newspaper
-front page at runtime — masthead, headline, six stories each with a small
-drawn picture, and an also-today strip — and writes it to `entry.png`:
+## What it does
+
+`main.py` draws a 1024×1024 newspaper front page — "The Otter Times" —
+entirely at runtime, using only the Python 3 standard library. No images,
+no network access, no files read at runtime. The page is built from
+scratch: a hand-designed 5×8 bitmap font, small hand-drawn pictures for
+each story (a GPU chip, a drone, a capitol dome, a sealed document, city
+buildings, a factory, a rising bar chart), and a minimal PNG encoder
+written in the same file.
+
+The output is deterministic: run it twice and the PNG bytes are
+identical.
+
+## How to run
 
 ```sh
-MAKEFUN_OUTPUT_DIR=out python3 main.py   # writes out/entry.png
+python3 main.py
 ```
 
-Two runs produce byte-identical output. The PNG is 1024×1024 and under 1 MiB.
+That writes `out/entry.png`. To choose another folder:
 
-## The day's stories (all as reported on 24 November 2026)
+```sh
+MAKEFUN_OUTPUT_DIR=/path/to/dir python3 main.py
+```
 
-- **Headline — Huang is back at Nvidia.** Eleven days after he quit as
-  chief executive, Jensen Huang is back running the chipmaker he
-  co-founded. Shares jump 31% and lift the Nasdaq 6.5%. Trump pressed for
-  his return and said it posed no national security risk; US lawmakers
-  vowed to keep probing Nvidia. Sources: Reuters, Agence France-Presse.
-- **Mexico.** Mexico says a US surveillance drone helped track "El Chapo
-  Isidro" in Sinaloa. His capture set off clashes that left 20 people
-  dead. Source: Associated Press.
-- **USA.** Rep. Jimmy Gomez quits from Dec 1 after a House Ethics report
-  found substantial evidence of sexual misconduct toward a staffer.
-  Sources: Associated Press, CNN.
-- **China.** An official surnamed Ma is sentenced to death for leaking 35
-  state secrets to a foreign agency for over $150,000, state media say.
-  Source: Reuters.
-- **Sudan.** Drone strikes hit homes and the UN building in Khartoum, the
-  capital, early on Tuesday, reports say. Source: The Manila Times.
-- **Indonesia.** Rescuers recover more remains from the candy factory
-  fire in Cikande. The search goes on for 34 missing workers. Source:
-  Associated Press.
-- **Japan.** Factory activity grows faster in November, flash PMI 53.7,
-  as output and export orders rise on chip demand. Source: Reuters.
-- **Also today.** FIFA confirms the US will co-host the 2031 Women's
-  World Cup, UK gets 2035; WFP warns wars threaten food aid for 7.3m
+## The day's stories
+
+As reported on Tuesday, 24 November 2026:
+
+- **Headline — Nvidia:** Jensen Huang returns as chief executive 11 days
+  after quitting; shares rise 31% and the Nasdaq climbs 6.5%.
+- **Mexico:** a US surveillance drone helped track "El Chapo Isidro" in
+  Sinaloa; his capture set off clashes leaving 20 dead.
+- **USA:** Rep. Jimmy Gomez resigns effective 1 December after a House
+  Ethics report found substantial evidence of sexual misconduct toward a
+  staffer.
+- **China:** an official surnamed Ma is sentenced to death for leaking 35
+  state secrets to a foreign agency for more than $150,000.
+- **Sudan:** drone strikes hit homes and the UN building in Khartoum early
+  on Tuesday.
+- **Indonesia:** more remains are recovered from the Cikande candy factory
+  fire; the search continues for 34 missing workers.
+- **Japan:** factory activity grows faster in November, flash PMI 53.7, on
+  chip demand.
+- **Also today:** FIFA confirms the US will co-host the 2031 Women's World
+  Cup (the UK gets 2035); the WFP warns wars threaten food aid for 7.3m
   more people; Trump orders executions to be expedited; Virginia and
   Oregon sue SpaceX over Grok deepfakes.
+
+Sources: Reuters, AFP, Associated Press, CNN, The Manila Times.
 
 ## License
 
